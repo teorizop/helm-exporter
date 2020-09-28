@@ -62,6 +62,15 @@ var (
 		"latestVersion",
 	})
 
+	countAllReleases = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "helm_chart_all_releases_total",
+		Help: "Total Number of all Helm releases",
+	}, []string{
+		"chart",
+		"release",
+		"namespace",
+	})
+
 	namespaces = flag.String("namespaces", "", "namespaces to monitor.  Defaults to all")
 	configFile = flag.String("config", "", "Configfile to load for helm overwrite registries.  Default is empty")
 
@@ -127,6 +136,9 @@ func runStats(config config.Config) {
 			if *timestampMetric == true {
 				statsTimestamp.WithLabelValues(chart, releaseName, version, appVersion, strconv.FormatInt(updated, 10), namespace, latestVersion).Set(float64(updated))
 			}
+
+			countAllReleases.DeleteLabelValues(chart, releaseName, namespace)
+			countAllReleases.WithLabelValues(chart, releaseName, namespace).Add(float64(item.Version))
 		}
 	}
 }
