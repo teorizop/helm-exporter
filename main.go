@@ -74,8 +74,9 @@ var (
 	namespaces = flag.String("namespaces", "", "namespaces to monitor.  Defaults to all")
 	configFile = flag.String("config", "", "Configfile to load for helm overwrite registries.  Default is empty")
 
-	infoMetric      = flag.Bool("info-metric", true, "Generate info metric.  Defaults to true")
-	timestampMetric = flag.Bool("timestamp-metric", true, "Generate timestamps metric.  Defaults to true")
+	infoMetric             = flag.Bool("info-metric", true, "Generate info metric.  Defaults to true")
+	timestampMetric        = flag.Bool("timestamp-metric", true, "Generate timestamps metric.  Defaults to true")
+	countAllReleasesMetric = flag.Bool("count-all-releases-metric", true, "Generate count metric for all Helm releases. Defaults to true")
 
 	fetchLatest = flag.Bool("latest-chart-version", true, "Attempt to fetch the latest chart version from registries. Defaults to true")
 
@@ -137,8 +138,10 @@ func runStats(config config.Config) {
 				statsTimestamp.WithLabelValues(chart, releaseName, version, appVersion, strconv.FormatInt(updated, 10), namespace, latestVersion).Set(float64(updated))
 			}
 
-			countAllReleases.DeleteLabelValues(chart, releaseName, namespace)
-			countAllReleases.WithLabelValues(chart, releaseName, namespace).Add(float64(item.Version))
+			if *countAllReleasesMetric == true {
+				countAllReleases.DeleteLabelValues(chart, releaseName, namespace)
+				countAllReleases.WithLabelValues(chart, releaseName, namespace).Add(float64(item.Version))
+			}
 		}
 	}
 }

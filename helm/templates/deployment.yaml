@@ -52,6 +52,9 @@ spec:
             {{- if not .Values.timestampMetric }}
             - "-timestamp-metric=false"
             {{- end }}
+            {{- if not .Values.countAllReleasesMetric }}
+            - "-count-all-releases-metric=false"
+            {{- end }}
             {{- if not .Values.latestChartVersion }}
             - "-latest-chart-version=false"
             {{- end }}

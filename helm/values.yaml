@@ -2,6 +2,7 @@
 namespaces: ""
 infoMetric: true
 timestampMetric: true
+countAllReleasesMetric: true
 latestChartVersion: true
 
 serviceMonitor:

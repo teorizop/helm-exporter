@@ -45,6 +45,7 @@ The following table lists the configurable parameters of the helm-exporter chart
 | config.override[0].allowAllReleases | bool | `true` | This allows all semver versions, like release candidates or custom suffixes. |
 | config.override[0].charts | list | `[]` | Chart names for the override (chart) registry/repo url |
 | config.override[0].registry.url | string | `""` |  Url to the index file for a custom helm repo |
+| countAllReleasesMetric | bool | `true` | Specifies whether to generate the metric which counts all releases |
 | fullnameOverride | string | `""` | Provide a name to substitute for the full names of resources |
 | image.pullPolicy | string | `"Always"` | Image pull policy for the webhook integration jobs |
 | image.repository | string | `"sstarcher/helm-exporter"` | Repository to use for the webhook integration jobs |
