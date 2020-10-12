@@ -28,48 +28,13 @@ import (
 
 	"github.com/facebookgo/flagenv"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 var (
+	cfg      config.Config
 	settings = cli.New()
 	clients  = cmap.New()
-
-	statsInfo = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "helm_chart_info",
-		Help: "Information on helm releases",
-	}, []string{
-		"chart",
-		"release",
-		"version",
-		"appVersion",
-		"updated",
-		"namespace",
-		"latestVersion",
-	})
-
-	statsTimestamp = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "helm_chart_timestamp",
-		Help: "Timestamps of helm releases",
-	}, []string{
-		"chart",
-		"release",
-		"version",
-		"appVersion",
-		"updated",
-		"namespace",
-		"latestVersion",
-	})
-
-	countAllReleases = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "helm_chart_all_releases_total",
-		Help: "Total Number of all Helm releases",
-	}, []string{
-		"chart",
-		"release",
-		"namespace",
-	})
 
 	namespaces = flag.String("namespaces", "", "namespaces to monitor.  Defaults to all")
 	configFile = flag.String("config", "", "Configfile to load for helm overwrite registries.  Default is empty")
@@ -91,9 +56,15 @@ var (
 		"pending-upgrade":  7,
 		"pending-rollback": 8,
 	}
-
-	prometheusHandler = promhttp.Handler()
 )
+
+// helmCollector is the struct for the Helm collector that contains
+// pointers to prometheus descriptors for each metric.
+type helmCollector struct {
+	revisionsCounterDesc    *prometheus.Desc
+	statsInfoGaugeDesc      *prometheus.Desc
+	statsTimestampGaugeDesc *prometheus.Desc
+}
 
 func initFlags() config.AppConfig {
 	cliFlags := new(config.AppConfig)
@@ -101,48 +72,28 @@ func initFlags() config.AppConfig {
 	return *cliFlags
 }
 
-func runStats(config config.Config) {
-	if *infoMetric == true {
-		statsInfo.Reset()
-	}
-	if *timestampMetric == true {
-		statsTimestamp.Reset()
-	}
-
-	for _, client := range clients.Items() {
-		list := action.NewList(client.(*action.Configuration))
-		items, err := list.Run()
-		if err != nil {
-			log.Warnf("got error while listing %v", err)
-			continue
-		}
-
-		for _, item := range items {
-			chart := item.Chart.Name()
-			releaseName := item.Name
-			version := item.Chart.Metadata.Version
-			appVersion := item.Chart.AppVersion()
-			updated := item.Info.LastDeployed.Unix() * 1000
-			namespace := item.Namespace
-			status := statusCodeMap[item.Info.Status.String()]
-			latestVersion := ""
-
-			if *fetchLatest {
-				latestVersion = getLatestChartVersionFromHelm(item.Chart.Name(), config.HelmRegistries)
-			}
-
-			if *infoMetric == true {
-				statsInfo.WithLabelValues(chart, releaseName, version, appVersion, strconv.FormatInt(updated, 10), namespace, latestVersion).Set(status)
-			}
-			if *timestampMetric == true {
-				statsTimestamp.WithLabelValues(chart, releaseName, version, appVersion, strconv.FormatInt(updated, 10), namespace, latestVersion).Set(float64(updated))
-			}
-
-			if *countAllReleasesMetric == true {
-				countAllReleases.DeleteLabelValues(chart, releaseName, namespace)
-				countAllReleases.WithLabelValues(chart, releaseName, namespace).Add(float64(item.Version))
-			}
-		}
+// newHelmCollector creates a constructor for the Helm collector that
+// initializes every descriptor and returns a pointer to the collector.
+func newHelmCollector() *helmCollector {
+	return &helmCollector{
+		revisionsCounterDesc: prometheus.NewDesc(
+			"helm_chart_all_releases_total",
+			"Total Number of all Helm releases",
+			[]string{"chart", "release", "namespace"},
+			nil,
+		),
+		statsInfoGaugeDesc: prometheus.NewDesc(
+			"helm_chart_info",
+			"Information on helm releases",
+			[]string{"chart", "release", "version", "appVersion", "updated", "namespace", "latestVersion"},
+			nil,
+		),
+		statsTimestampGaugeDesc: prometheus.NewDesc(
+			"helm_chart_timestamp",
+			"Timestamps of helm releases",
+			[]string{"chart", "release", "version", "appVersion", "updated", "namespace", "latestVersion"},
+			nil,
+		),
 	}
 }
 
@@ -150,13 +101,6 @@ func getLatestChartVersionFromHelm(name string, helmRegistries registries.HelmRe
 	version = helmRegistries.GetLatestVersionFromHelm(name)
 	log.WithField("chart", name).Debugf("last chart repo version is  %v", version)
 	return
-}
-
-func newHelmStatsHandler(config config.Config) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		runStats(config)
-		prometheusHandler.ServeHTTP(w, r)
-	}
 }
 
 func healthz(w http.ResponseWriter, r *http.Request) {
@@ -208,11 +152,85 @@ func informer() {
 	informer.Run(stopper)
 }
 
+// Describe implements prometheus.Collector.
+// Each and every collector must implement the Describe function.
+// It essentially writes all descriptors to the prometheus desc channel.
+func (c *helmCollector) Describe(ch chan<- *prometheus.Desc) {
+	ch <- c.revisionsCounterDesc
+	if *infoMetric == true {
+		ch <- c.statsInfoGaugeDesc
+	}
+	if *timestampMetric == true {
+		ch <- c.statsTimestampGaugeDesc
+	}
+}
+
+// Collect implements prometheus.Collector.
+// Collect implements required collect function for all promehteus collectors
+func (c *helmCollector) Collect(ch chan<- prometheus.Metric) {
+	for _, client := range clients.Items() {
+		list := action.NewList(client.(*action.Configuration))
+		items, err := list.Run()
+		if err != nil {
+			log.Warnf("got error while listing %v", err)
+			continue
+		}
+
+		for _, item := range items {
+			chart := item.Chart.Name()
+			releaseName := item.Name
+			version := item.Chart.Metadata.Version
+			appVersion := item.Chart.AppVersion()
+			updated := item.Info.LastDeployed.Unix() * 1000
+			namespace := item.Namespace
+			status := statusCodeMap[item.Info.Status.String()]
+			latestVersion := ""
+
+			if *fetchLatest {
+				latestVersion = getLatestChartVersionFromHelm(item.Chart.Name(), cfg.HelmRegistries)
+			}
+
+			helmRevisionsLabelValues := []string{chart, releaseName, namespace}
+			helmStatsInfoLabelValues := []string{chart, releaseName, version, appVersion, strconv.FormatInt(updated, 10), namespace, latestVersion}
+			helmStatsTimestampLabelValues := []string{chart, releaseName, version, appVersion, strconv.FormatInt(updated, 10), namespace, latestVersion}
+			ch <- prometheus.MustNewConstMetric(
+				c.revisionsCounterDesc,
+				prometheus.CounterValue,
+				float64(item.Version),
+				helmRevisionsLabelValues...,
+			)
+
+			if *infoMetric == true {
+				ch <- prometheus.MustNewConstMetric(
+					c.statsInfoGaugeDesc,
+					prometheus.GaugeValue,
+					status,
+					helmStatsInfoLabelValues...,
+				)
+			}
+			if *timestampMetric == true {
+				ch <- prometheus.MustNewConstMetric(
+					c.statsTimestampGaugeDesc,
+					prometheus.GaugeValue,
+					float64(updated),
+					helmStatsTimestampLabelValues...,
+				)
+			}
+
+		}
+	}
+}
+
+func init() {
+	// Metrics have to be registered to be exposed.
+	prometheus.MustRegister(newHelmCollector())
+}
+
 func main() {
 	flagenv.Parse()
 	flag.Parse()
 	cliFlags := initFlags()
-	config := config.LoadConfiguration(cliFlags.ConfigFile)
+	cfg = config.LoadConfiguration(cliFlags.ConfigFile)
 
 	if namespaces == nil || *namespaces == "" {
 		go informer()
@@ -222,7 +240,7 @@ func main() {
 		}
 	}
 
-	http.HandleFunc("/metrics", newHelmStatsHandler(config))
+	http.Handle("/metrics", promhttp.Handler())
 	http.HandleFunc("/healthz", healthz)
 	log.Fatal(http.ListenAndServe(":9571", nil))
 }
